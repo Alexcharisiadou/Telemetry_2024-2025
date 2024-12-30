@@ -2,7 +2,7 @@ from tkinter import *
 from tkinter import ttk
 from ttkthemes import ThemedTk
 from datetime import datetime
-from history_tab import HistoryTab  # Εισάγουμε την κλάση HistoryTab
+from historytab import HistoryTab  # Εισάγουμε την κλάση HistoryTab
 
 # Dummy data classes
 class ACUData:
