@@ -1,134 +1,289 @@
-from tkinter import Tk, Frame, Label, Listbox, Scrollbar, Entry, Button, END, ttk
+import serial
+from tkinter import *
+from tkinter import ttk
+from ttkthemes import ThemedTk
 from datetime import datetime
+import serial.tools.list_ports
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
+# Data Classes for Telemetry
+class ACUData:
+    def __init__(self):
+        self.temperature = 11
+        self.vicorTemperature = 0
+        self.humidity = 12
+        self.imdResistance = 0
+        self.airPlus = "Armed"
+        self.airMinus = "Disarmed"
+        self.preRelay = "Disarmed"
+        self.TSOver60 = "No"
+        self.AMSError = "OK"
+        self.IMDError = "OK"
+        self.AirsStuck = "No"
+
+class BMSData:
+    def __init__(self):
+        self.minimumCellVoltage = 0.0
+        self.maximumCellVoltage = 0.0
+        self.maximumTemperature = 0
+
+class VCUData:
+    def __init__(self):
+        self.mode = "OFF"
+        self.apps = 0.0
+        self.brakeSensor = 0.0
+
+class IVTData:
+    def __init__(self):
+        self.current = 0.0
+        self.voltage = 605.0
+        self.wattage = 0.0
+
+class InverterData:
+    def __init__(self):
+        self.motorRPM = 23
+        self.motorTemperature = 30
+        self.igbtTemperature = 35
+
+class SharedData:
+    def __init__(self):
+        self.acu = ACUData()
+        self.bms = BMSData()
+        self.vcu = VCUData()
+        self.ivt = IVTData()
+        self.inverter = InverterData()
+
+shared_data = SharedData()
+
+# Serial Connection Setup
+def setup_serial(port="COM3", baudrate=9600):
+    available_ports = [p.device for p in serial.tools.list_ports.comports()]
+    print(f"Available ports: {available_ports}")
+    if port not in available_ports:
+        print(f"Port {port} is not available. Please choose from {available_ports}")
+        return None
+    try:
+        return serial.Serial(port=port, baudrate=baudrate, timeout=1)
+    except serial.SerialException as e:
+        print(f"Serial connection error: {e}")
+        return None
+
+serial_port = setup_serial()
+
+# Tkinter GUI Setup
+root = ThemedTk(theme="arc")
+root.title("Telemetry Dashboard")
+root.geometry("1200x800")
+
+# Notebook for Tabs
+notebook = ttk.Notebook(root)
+notebook.pack(fill=BOTH, expand=True)
+
+# History Tab
 class HistoryTab:
-    def __init__(self, notebook, shared_data):
-        # Δημιουργία πλαισίου για την καρτέλα ιστορικού
-        self.frame = Frame(notebook, bg="lightgray")
-        notebook.add(self.frame, text="Data History")
-        self.shared_data = shared_data
-        self.data_log = []  # Για αποθήκευση του ιστορικού δεδομένων
+    def __init__(self, notebook):
+        self.frame = Frame(notebook)
+        notebook.add(self.frame, text="History")
+        self.tree = ttk.Treeview(self.frame, columns=("timestamp", "parameter", "value"), show="headings")
+        self.tree.heading("timestamp", text="Timestamp")
+        self.tree.heading("parameter", text="Parameter")
+        self.tree.heading("value", text="Value")
+        self.tree.pack(expand=True, fill=BOTH)
 
-        # Ετικέτα και πεδίο αναζήτησης
-        search_label = Label(self.frame, text="Search by Parameter:", font=("Arial", 12), bg="lightgray")
-        search_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-
-        self.search_entry = Entry(self.frame, font=("Arial", 12), width=30)
-        self.search_entry.grid(row=0, column=1, padx=10, pady=10, sticky="w")
-
-        search_button = Button(self.frame, text="Search", command=self.search_data)
-        search_button.grid(row=0, column=2, padx=10, pady=10)
-
-        # Πλαίσια για κάθε κατηγορία δεδομένων
-        self.motor_rpm_frame = Frame(self.frame, bg="lightyellow", highlightbackground="black", highlightthickness=1)
-        self.motor_rpm_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-        motor_rpm_label = Label(self.motor_rpm_frame, text="Motor RPM", font=("Arial", 14, "bold"), bg="lightyellow")
-        motor_rpm_label.pack(anchor="w", padx=10, pady=5)
-
-        self.humidity_frame = Frame(self.frame, bg="lightcyan", highlightbackground="black", highlightthickness=1)
-        self.humidity_frame.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
-        humidity_label = Label(self.humidity_frame, text="Humidity", font=("Arial", 14, "bold"), bg="lightcyan")
-        humidity_label.pack(anchor="w", padx=10, pady=5)
-
-        # Λίστα για εμφάνιση ιστορικού δεδομένων
-        self.history_list = Listbox(self.motor_rpm_frame, font=("Arial", 12), width=40, height=10)
-        self.history_list.pack(padx=10, pady=5, fill="both", expand=True)
-
-        self.humidity_list = Listbox(self.humidity_frame, font=("Arial", 12), width=40, height=10)
-        self.humidity_list.pack(padx=10, pady=5, fill="both", expand=True)
-
-        # Προσθήκη διαγράμματος
+        # Add a plot for historical data visualization
         self.figure, self.ax = plt.subplots(figsize=(5, 4))
         self.ax.set_title("Parameter Over Time")
         self.ax.set_xlabel("Time")
         self.ax.set_ylabel("Value")
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.frame)
-        self.canvas.get_tk_widget().grid(row=2, column=0, columnspan=3, padx=10, pady=10)
-
-        # Αρχική ενημέρωση του διαγράμματος
-        self.canvas.draw()
-
-        # Προσαρμογή του πλαισίου για δυναμική αλλαγή μεγέθους
-        self.frame.grid_rowconfigure(2, weight=1)
-        self.frame.grid_columnconfigure(0, weight=1)
-        self.frame.grid_columnconfigure(1, weight=1)
+        self.canvas.get_tk_widget().pack(padx=10, pady=10, fill=BOTH, expand=True)
+        self.data_log = []  # To store historical data
 
     def add_entry(self, parameter, value):
-        """Προσθήκη νέας εγγραφής στο ιστορικό δεδομένων."""
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = f"{current_time} - {parameter}: {value}"
-        self.data_log.append((parameter, current_time, value))
+        self.tree.insert("", "end", values=(current_time, parameter, value))
+        self.data_log.append((parameter, current_time, float(value.strip('%').strip('°C').strip('V').strip('A'))))
+        self.update_plot()
 
-        # Εμφάνιση της εγγραφής στο σωστό πλαίσιο
-        if parameter == "Motor RPM":
-            self.history_list.insert(END, entry)
-            if self.history_list.size() > 50:
-                self.history_list.delete(0)  # Κρατάμε μόνο τα τελευταία 50 στοιχεία
+    def update_plot(self):
+        self.ax.clear()
+        self.ax.set_title("Parameter Over Time")
+        self.ax.set_xlabel("Time")
+        self.ax.set_ylabel("Value")
 
-        elif parameter == "Humidity":
-            self.humidity_list.insert(END, entry)
-            if self.humidity_list.size() > 50:
-                self.humidity_list.delete(0)  # Κρατάμε μόνο τα τελευταία 50 στοιχεία
-
-        # Ενημέρωση διαγράμματος
-        self.update_plot(parameter)
-
-    def update_plot(self, parameter):
-        """Ενημερώνει το διάγραμμα με τα τελευταία δεδομένα για το συγκεκριμένο parameter."""
-        times = []
-        values = []
-
-        # Φιλτράρουμε τα δεδομένα για το επιλεγμένο parameter
+        # Separate data by parameters
+        grouped_data = {}
         for param, timestamp, value in self.data_log:
-            if param == parameter:
-                times.append(datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S"))
-                values.append(float(value))  # Μετατρέπουμε την τιμή σε float για το διάγραμμα
+            if param not in grouped_data:
+                grouped_data[param] = []
+            grouped_data[param].append((timestamp, value))
 
-        # Αν υπάρχουν δεδομένα για τον συγκεκριμένο parameter, σχεδιάζουμε το διάγραμμα
-        if times and values:
-            self.ax.clear()
-            self.ax.plot(times, values, marker='o', linestyle='-', color='b')
-            self.ax.set_title(f"{parameter} Over Time")
-            self.ax.set_xlabel("Time")
-            self.ax.set_ylabel(parameter)
-            self.ax.tick_params(axis='x', rotation=45)  # Περιστροφή του άξονα Χ για καλύτερη ανάγνωση
-            self.canvas.draw()
+        for param, values in grouped_data.items():
+            times, data = zip(*values)
+            times = [datetime.strptime(t, "%Y-%m-%d %H:%M:%S").strftime("%H:%M:%S") for t in times]
+            self.ax.plot(times, data, marker='o', label=param)
 
-    def search_data(self):
-        """Αναζήτηση δεδομένων βάσει του παραμέτρου."""
-        search_term = self.search_entry.get().strip().lower()
-        self.history_list.delete(0, END)  # Καθαρισμός της λίστας του Motor RPM
-        self.humidity_list.delete(0, END)  # Καθαρισμός της λίστας του Humidity
+        self.ax.legend()
+        self.ax.tick_params(axis='x', rotation=45)
+        self.canvas.draw()
 
-        # Φιλτράρισμα δεδομένων
-        for entry in self.data_log:
-            parameter, timestamp, value = entry
-            display_text = f"{timestamp} - {parameter}: {value}"
-            if search_term in parameter.lower():
-                if parameter == "Motor RPM":
-                    self.history_list.insert(END, display_text)
-                elif parameter == "Humidity":
-                    self.humidity_list.insert(END, display_text)
+history_tab = HistoryTab(notebook)
 
-        # Ενημέρωση διαγράμματος με τα φιλτραρισμένα δεδομένα
-        if search_term:
-            self.update_plot(search_term)
+# Dashboard Tab
+dashboad_frame = Frame(notebook)
+notebook.add(dashboad_frame, text="Dashboard")
 
-# Παράδειγμα χρήσης με Notebook και μετρήσεις
-root = Tk()
-notebook = ttk.Notebook(root)
-notebook.pack(expand=True, fill="both")
+# Layout Configuration for Dashboard
+for i in range(4):
+    dashboad_frame.grid_rowconfigure(i, weight=1)
+for j in range(2):
+    dashboad_frame.grid_columnconfigure(j, weight=1)
 
-shared_data = {}  # Placeholder για δεδομένα
-history_tab = HistoryTab(notebook, shared_data)
+# ACU Frame
+acu_frame = Frame(dashboad_frame, bg="lightblue", highlightbackground="black", highlightthickness=2)
+acu_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+acu_label = Label(acu_frame, text="ACU Data", bg="lightblue", font=("Arial", 16, "bold"))
+acu_label.pack()
+acu_temperature_label = Label(acu_frame, text=f"Temperature: {shared_data.acu.temperature}°C", bg="lightblue")
+acu_temperature_label.pack()
+acu_humidity_label = Label(acu_frame, text=f"Humidity: {shared_data.acu.humidity}%", bg="lightblue")
+acu_humidity_label.pack()
 
-# Προσθήκη παραδειγμάτων μετρήσεων
-history_tab.add_entry("Motor RPM", "1500")
-history_tab.add_entry("Humidity", "45")
-history_tab.add_entry("Motor RPM", "1600")
-history_tab.add_entry("Motor RPM", "1550")
-history_tab.add_entry("Humidity", "50")
+# BMS Frame
+bms_frame = Frame(dashboad_frame, bg="lightgreen", highlightbackground="black", highlightthickness=2)
+bms_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
+bms_label = Label(bms_frame, text="BMS Data", bg="lightgreen", font=("Arial", 16, "bold"))
+bms_label.pack()
+bms_min_voltage_label = Label(bms_frame, text=f"Min Voltage: {shared_data.bms.minimumCellVoltage}V", bg="lightgreen")
+bms_min_voltage_label.pack()
+bms_max_voltage_label = Label(bms_frame, text=f"Max Voltage: {shared_data.bms.maximumCellVoltage}V", bg="lightgreen")
+bms_max_voltage_label.pack()
+bms_max_temp_label = Label(bms_frame, text=f"Max Temp: {shared_data.bms.maximumTemperature}°C", bg="lightgreen")
+bms_max_temp_label.pack()
 
+# VCU Frame
+vcu_frame = Frame(dashboad_frame, bg="lightyellow", highlightbackground="black", highlightthickness=2)
+vcu_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+vcu_label = Label(vcu_frame, text="VCU Data", bg="lightyellow", font=("Arial", 16, "bold"))
+vcu_label.pack()
+vcu_mode_label = Label(vcu_frame, text=f"Mode: {shared_data.vcu.mode}", bg="lightyellow")
+vcu_mode_label.pack()
+vcu_apps_label = Label(vcu_frame, text=f"APPS: {shared_data.vcu.apps}%", bg="lightyellow")
+vcu_apps_label.pack()
+vcu_brake_label = Label(vcu_frame, text=f"Brake Sensor: {shared_data.vcu.brakeSensor}%", bg="lightyellow")
+vcu_brake_label.pack()
+
+# IVT Frame
+ivt_frame = Frame(dashboad_frame, bg="lightcoral", highlightbackground="black", highlightthickness=2)
+ivt_frame.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
+ivt_label = Label(ivt_frame, text="IVT Data", bg="lightcoral", font=("Arial", 16, "bold"))
+ivt_label.pack()
+ivt_current_label = Label(ivt_frame, text=f"Current: {shared_data.ivt.current}A", bg="lightcoral")
+ivt_current_label.pack()
+ivt_voltage_label = Label(ivt_frame, text=f"Voltage: {shared_data.ivt.voltage}V", bg="lightcoral")
+ivt_voltage_label.pack()
+ivt_wattage_label = Label(ivt_frame, text=f"Wattage: {shared_data.ivt.wattage}W", bg="lightcoral")
+ivt_wattage_label.pack()
+
+# Inverter Frame
+inverter_frame = Frame(dashboad_frame, bg="lightgray", highlightbackground="black", highlightthickness=2)
+inverter_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+inverter_label = Label(inverter_frame, text="Inverter Data", bg="lightgray", font=("Arial", 16, "bold"))
+inverter_label.pack()
+inverter_rpm_label = Label(inverter_frame, text=f"Motor RPM: {shared_data.inverter.motorRPM}", bg="lightgray")
+inverter_rpm_label.pack()
+inverter_motor_temp_label = Label(inverter_frame, text=f"Motor Temp: {shared_data.inverter.motorTemperature}°C", bg="lightgray")
+inverter_motor_temp_label.pack()
+inverter_igbt_temp_label = Label(inverter_frame, text=f"IGBT Temp: {shared_data.inverter.igbtTemperature}°C", bg="lightgray")
+inverter_igbt_temp_label.pack()
+
+# Serial Data Processing
+def process_serial_data(data):
+    print(f"Received data: {data}")  # Debug raw data
+    try:
+        key_value_pairs = data.split(",")
+        for pair in key_value_pairs:
+            if ":" in pair:
+                key, value = pair.split(":")
+                key = key.strip().upper()
+                value = value.strip()
+                if key == "TEMP":
+                    shared_data.acu.temperature = float(value)
+                    history_tab.add_entry("Temperature", f"{value}°C")
+                elif key == "HUMIDITY":
+                    shared_data.acu.humidity = float(value)
+                    history_tab.add_entry("Humidity", f"{value}%")
+                elif key == "VOLTAGE":
+                    shared_data.ivt.voltage = float(value)
+                    history_tab.add_entry("Voltage", f"{value}V")
+                elif key == "CURRENT":
+                    shared_data.ivt.current = float(value)
+                    history_tab.add_entry("Current", f"{value}A")
+                elif key == "APPS":
+                    shared_data.vcu.apps = float(value)
+                    history_tab.add_entry("APPS", f"{value}%")
+    except ValueError as e:
+        print(f"Error processing data: {data}, Error: {e}")
+
+# Serial Data Reader
+def read_serial_data():
+    if running:
+        try:
+            if serial_port and serial_port.in_waiting > 0:
+                line = serial_port.readline().decode("utf-8").strip()
+                process_serial_data(line)
+        except Exception as e:
+            print(f"Serial read error: {e}")
+        finally:
+            root.after(100, read_serial_data)
+
+# Simulate Serial Data for Testing (Optional)
+def simulate_serial_data():
+    if running:
+        simulated_data = "TEMP:25,HUMIDITY:50,VOLTAGE:605,CURRENT:10,APPS:30"
+        process_serial_data(simulated_data)
+        root.after(1000, simulate_serial_data)
+
+# Update GUI
+def update_gui():
+    if running:
+        acu_temperature_label.config(text=f"Temperature: {shared_data.acu.temperature}°C")
+        acu_humidity_label.config(text=f"Humidity: {shared_data.acu.humidity}%")
+        bms_min_voltage_label.config(text=f"Min Voltage: {shared_data.bms.minimumCellVoltage}V")
+        bms_max_voltage_label.config(text=f"Max Voltage: {shared_data.bms.maximumCellVoltage}V")
+        bms_max_temp_label.config(text=f"Max Temp: {shared_data.bms.maximumTemperature}°C")
+        vcu_mode_label.config(text=f"Mode: {shared_data.vcu.mode}")
+        vcu_apps_label.config(text=f"APPS: {shared_data.vcu.apps}%")
+        vcu_brake_label.config(text=f"Brake Sensor: {shared_data.vcu.brakeSensor}%")
+        ivt_current_label.config(text=f"Current: {shared_data.ivt.current}A")
+        ivt_voltage_label.config(text=f"Voltage: {shared_data.ivt.voltage}V")
+        ivt_wattage_label.config(text=f"Wattage: {shared_data.ivt.wattage}W")
+        inverter_rpm_label.config(text=f"Motor RPM: {shared_data.inverter.motorRPM}")
+        inverter_motor_temp_label.config(text=f"Motor Temp: {shared_data.inverter.motorTemperature}°C")
+        inverter_igbt_temp_label.config(text=f"IGBT Temp: {shared_data.inverter.igbtTemperature}°C")
+        root.after(1000, update_gui)
+
+# Handle Window Close Event
+def on_closing():
+    global running
+    running = False  # Stop all updates
+    if serial_port and serial_port.is_open:
+        serial_port.close()
+        print("Serial port closed.")
+    root.quit()
+    root.destroy()
+
+# Bind the close event to the main window
+root.protocol("WM_DELETE_WINDOW", on_closing)
+
+# Start periodic updates
+running = True
+if serial_port:
+    read_serial_data()
+else:
+    simulate_serial_data()
+update_gui()
+
+# Run the application
 root.mainloop()
