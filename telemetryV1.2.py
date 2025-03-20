@@ -1,254 +1,199 @@
-import serial
+import tkinter
+from ttkthemes import ThemedTk
 from tkinter import *
 from tkinter import ttk
-from ttkthemes import ThemedTk
 from datetime import datetime
-import serial.tools.list_ports
+from history_tab import HistoryTab  # Ensure history_tab.py has its demo code wrapped in if __name__ == "__main__"
 
-# Data Classes for Telemetry
+# Dummy data classes
 class ACUData:
     def __init__(self):
         self.temperature = 11
         self.vicorTemperature = 0
         self.humidity = 12
         self.imdResistance = 0
+        self.imdStatus = 0
         self.airPlus = "Armed"
         self.airMinus = "Disarmed"
         self.preRelay = "Disarmed"
         self.TSOver60 = "No"
         self.AMSError = "OK"
         self.IMDError = "OK"
-        self.AirsStuck = "No"
+        self.lastError = "None"
+        self.AirsStuck = "None"
 
 class BMSData:
     def __init__(self):
         self.minimumCellVoltage = 0.0
+        self.minimumCellVoltageID = 0
         self.maximumCellVoltage = 0.0
+        self.maximumCellVoltageID = 0
         self.maximumTemperature = 0
+        self.maximumTemperatureID = 0
+        self.lastError = "None"
+        self.ISOSPI = "OK"
+        self.voltages = "OK"
+        self.temperatures = "OK"
+        self.currentSensor = "OK"
 
 class VCUData:
     def __init__(self):
-        self.mode = "OFF"
-        self.apps = 0.0
-        self.brakeSensor = 0.0
+        self.Mode = "OFF"
+        self.APPS = 0
+        self.BrakeSensor = 0
+        self.lastError = "None"
 
 class IVTData:
     def __init__(self):
-        self.current = 0.0
-        self.voltage = 605.0
-        self.wattage = 0.0
+        self.current = 0
+        self.voltage = 605
+        self.wattage = 0
+        self.wattageCounter = 0
+        self.currentCounter = 0
 
 class InverterData:
     def __init__(self):
         self.motorRPM = 23
-        self.motorTemperature = 30
-        self.igbtTemperature = 35
+        self.motorTemperature = 0
+        self.igbtTemperature = 0
+
+class TelemetryData:
+    def __init__(self):
+        self.isConnected = False
+        self.PER = 105
+        self.timeOutTimer = 0
+
+class DataLoggerData:
+    def __init__(self):
+        self.vehicleSpeed = 2
+        self.wheelRPM = 4
 
 class SharedData:
     def __init__(self):
+        self.telemetry = TelemetryData()
         self.acu = ACUData()
-        self.bms = BMSData()
         self.vcu = VCUData()
+        self.bms = BMSData()
         self.ivt = IVTData()
         self.inverter = InverterData()
+        self.datalogger = DataLoggerData()
 
-shared_data = SharedData()
-
-# Serial Connection Setup
-def setup_serial(port="COM3", baudrate=9600):
-    available_ports = [p.device for p in serial.tools.list_ports.comports()]
-    print(f"Available ports: {available_ports}")
-    if port not in available_ports:
-        print(f"Port {port} is not available. Please choose from {available_ports}")
-        return None
-    try:
-        return serial.Serial(port=port, baudrate=baudrate, timeout=1)
-    except serial.SerialException as e:
-        print(f"Serial connection error: {e}")
-        return None
-
-serial_port = setup_serial()
-
-# Tkinter GUI Setup
+# Initialize the main window
 root = ThemedTk(theme="arc")
-root.title("Telemetry Dashboard")
-root.geometry("1200x800")
+width = root.winfo_screenwidth()
+height = root.winfo_screenheight()
+root.geometry("%dx%d" % (width, height))
 
-# Notebook for Tabs
-notebook = ttk.Notebook(root)
-notebook.pack(fill=BOTH, expand=True)
-
-# History Tab
-class HistoryTab:
-    def __init__(self, notebook):
-        self.frame = Frame(notebook)
-        notebook.add(self.frame, text="History")
-        self.tree = ttk.Treeview(self.frame, columns=("timestamp", "parameter", "value"), show="headings")
-        self.tree.heading("timestamp", text="Timestamp")
-        self.tree.heading("parameter", text="Parameter")
-        self.tree.heading("value", text="Value")
-        self.tree.pack(expand=True, fill=BOTH)
-
-    def add_entry(self, parameter, value):
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.tree.insert("", "end", values=(current_time, parameter, value))
-
-history_tab = HistoryTab(notebook)
+# Create the main Notebook with two tabs
+main_notebook = ttk.Notebook(root)
+main_notebook.pack(expand=True, fill="both")
 
 # Dashboard Tab
-dashboad_frame = Frame(notebook)
-notebook.add(dashboad_frame, text="Dashboard")
+dashboard_frame = Frame(main_notebook)
+main_notebook.add(dashboard_frame, text="Dashboard")
 
-# Layout Configuration for Dashboard
-for i in range(4):
-    dashboad_frame.grid_rowconfigure(i, weight=1)
-for j in range(2):
-    dashboad_frame.grid_columnconfigure(j, weight=1)
+# Configure dashboard layout
+dashboard_frame.grid_rowconfigure(0, weight=1)
+dashboard_frame.grid_rowconfigure(1, weight=1)
+dashboard_frame.grid_rowconfigure(2, weight=1)
+dashboard_frame.grid_rowconfigure(3, weight=1)
+dashboard_frame.grid_columnconfigure(0, weight=1)
+dashboard_frame.grid_columnconfigure(1, weight=1)
 
-# ACU Frame
-acu_frame = Frame(dashboad_frame, bg="lightblue", highlightbackground="black", highlightthickness=2)
-acu_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-acu_label = Label(acu_frame, text="ACU Data", bg="lightblue", font=("Arial", 16, "bold"))
-acu_label.pack()
-acu_temperature_label = Label(acu_frame, text=f"Temperature: {shared_data.acu.temperature}°C", bg="lightblue")
-acu_temperature_label.pack()
-acu_humidity_label = Label(acu_frame, text=f"Humidity: {shared_data.acu.humidity}%", bg="lightblue")
-acu_humidity_label.pack()
+# --- Dashboard Content ---
+# Inverter frame
+inverterFrame = Frame(dashboard_frame, bg="lightyellow", highlightbackground="black", highlightthickness=2)
+inverterFrame.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+Label(inverterFrame, text="Inverter:", fg="blue", bg="lightyellow", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+inverterRPMLabel = Label(inverterFrame, text="Motor RPM: 23", bg="lightyellow", font=("Arial", 18))
+inverterRPMLabel.grid(row=1, column=0, padx=10, pady=5)
+Label(inverterFrame, text="Motor Temperature: 0°C", bg="lightyellow", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(inverterFrame, text="IGBT Temperature: 0°C", bg="lightyellow", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
 
-# BMS Frame
-bms_frame = Frame(dashboad_frame, bg="lightgreen", highlightbackground="black", highlightthickness=2)
-bms_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
-bms_label = Label(bms_frame, text="BMS Data", bg="lightgreen", font=("Arial", 16, "bold"))
-bms_label.pack()
-bms_min_voltage_label = Label(bms_frame, text=f"Min Voltage: {shared_data.bms.minimumCellVoltage}V", bg="lightgreen")
-bms_min_voltage_label.pack()
-bms_max_voltage_label = Label(bms_frame, text=f"Max Voltage: {shared_data.bms.maximumCellVoltage}V", bg="lightgreen")
-bms_max_voltage_label.pack()
-bms_max_temp_label = Label(bms_frame, text=f"Max Temp: {shared_data.bms.maximumTemperature}°C", bg="lightgreen")
-bms_max_temp_label.pack()
+# Function to create a scrollable frame (used for flags)
+def create_scrollable_frame(parent):
+    canvas = Canvas(parent)
+    scrollbar = Scrollbar(parent, orient="vertical", command=canvas.yview)
+    scrollable_frame = Frame(canvas)
+    scrollable_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.grid(row=0, column=0, sticky="nsew")
+    scrollbar.grid(row=0, column=1, sticky="ns")
+    parent.grid_rowconfigure(0, weight=1)
+    parent.grid_columnconfigure(0, weight=1)
+    return scrollable_frame
 
-# VCU Frame
-vcu_frame = Frame(dashboad_frame, bg="lightyellow", highlightbackground="black", highlightthickness=2)
-vcu_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-vcu_label = Label(vcu_frame, text="VCU Data", bg="lightyellow", font=("Arial", 16, "bold"))
-vcu_label.pack()
-vcu_mode_label = Label(vcu_frame, text=f"Mode: {shared_data.vcu.mode}", bg="lightyellow")
-vcu_mode_label.pack()
-vcu_apps_label = Label(vcu_frame, text=f"APPS: {shared_data.vcu.apps}%", bg="lightyellow")
-vcu_apps_label.pack()
-vcu_brake_label = Label(vcu_frame, text=f"Brake Sensor: {shared_data.vcu.brakeSensor}%", bg="lightyellow")
-vcu_brake_label.pack()
+# ACU Flags frame with scrollbar
+acuFlagsFrame = Frame(dashboard_frame, bg="lightblue", highlightbackground="black", highlightthickness=2)
+acuFlagsFrame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+scrollable_acu = create_scrollable_frame(acuFlagsFrame)
+Label(scrollable_acu, text="ACU Flags:", fg="blue", bg="lightblue", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(scrollable_acu, text="Air+: Armed", bg="lightblue", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="Air-: Disarmed", bg="lightblue", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="Pre: Disarmed", bg="lightblue", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="Over 60V: No", bg="lightblue", font=("Arial", 18)).grid(row=4, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="AMS Error: OK", bg="lightblue", font=("Arial", 18)).grid(row=5, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="IMD Error: OK", bg="lightblue", font=("Arial", 18)).grid(row=6, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="Airs Stuck: No", bg="lightblue", font=("Arial", 18)).grid(row=7, column=0, padx=10, pady=5)
 
-# IVT Frame
-ivt_frame = Frame(dashboad_frame, bg="lightcoral", highlightbackground="black", highlightthickness=2)
-ivt_frame.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
-ivt_label = Label(ivt_frame, text="IVT Data", bg="lightcoral", font=("Arial", 16, "bold"))
-ivt_label.pack()
-ivt_current_label = Label(ivt_frame, text=f"Current: {shared_data.ivt.current}A", bg="lightcoral")
-ivt_current_label.pack()
-ivt_voltage_label = Label(ivt_frame, text=f"Voltage: {shared_data.ivt.voltage}V", bg="lightcoral")
-ivt_voltage_label.pack()
-ivt_wattage_label = Label(ivt_frame, text=f"Wattage: {shared_data.ivt.wattage}W", bg="lightcoral")
-ivt_wattage_label.pack()
+# ACU Data frame
+acuDataFrame = Frame(dashboard_frame, bg="lightcyan", highlightbackground="black", highlightthickness=2)
+acuDataFrame.grid(row=1, column=0, padx=20, pady=20, sticky="nsew")
+Label(acuDataFrame, text="ACU Data:", fg="blue", bg="lightcyan", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(acuDataFrame, text="Humidity: 12%", bg="lightcyan", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(acuDataFrame, text="Temperature: 11°C", bg="lightcyan", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(acuDataFrame, text="IMD Resistance: 0 Ω", bg="lightcyan", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
+Label(acuDataFrame, text="Vicor Temperature: 0°C", bg="lightcyan", font=("Arial", 18)).grid(row=4, column=0, padx=10, pady=5)
 
-# Inverter Frame
-inverter_frame = Frame(dashboad_frame, bg="lightgray", highlightbackground="black", highlightthickness=2)
-inverter_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
-inverter_label = Label(inverter_frame, text="Inverter Data", bg="lightgray", font=("Arial", 16, "bold"))
-inverter_label.pack()
-inverter_rpm_label = Label(inverter_frame, text=f"Motor RPM: {shared_data.inverter.motorRPM}", bg="lightgray")
-inverter_rpm_label.pack()
-inverter_motor_temp_label = Label(inverter_frame, text=f"Motor Temp: {shared_data.inverter.motorTemperature}°C", bg="lightgray")
-inverter_motor_temp_label.pack()
-inverter_igbt_temp_label = Label(inverter_frame, text=f"IGBT Temp: {shared_data.inverter.igbtTemperature}°C", bg="lightgray")
-inverter_igbt_temp_label.pack()
+# BMS Flags frame
+bmsFrame = Frame(dashboard_frame, bg="lightgreen", highlightbackground="black", highlightthickness=2)
+bmsFrame.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
+scrollable_bms = create_scrollable_frame(bmsFrame)
+Label(scrollable_bms, text="BMS Flags:", fg="blue", bg="lightgreen", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(scrollable_bms, text="Min Voltage: 0.0 V", bg="lightgreen", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(scrollable_bms, text="Max Voltage: 0.0 V", bg="lightgreen", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(scrollable_bms, text="Max Temp: 0°C", bg="lightgreen", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
 
-# Serial Data Processing
-def process_serial_data(data):
-    print(f"Received data: {data}")  # Debug raw data
-    try:
-        key_value_pairs = data.split(",")
-        for pair in key_value_pairs:
-            if ":" in pair:
-                key, value = pair.split(":")
-                key = key.strip().upper()
-                value = value.strip()
-                if key == "TEMP":
-                    shared_data.acu.temperature = float(value)
-                    history_tab.add_entry("Temperature", f"{value}°C")
-                elif key == "HUMIDITY":
-                    shared_data.acu.humidity = float(value)
-                    history_tab.add_entry("Humidity", f"{value}%")
-                elif key == "VOLTAGE":
-                    shared_data.ivt.voltage = float(value)
-                    history_tab.add_entry("Voltage", f"{value}V")
-                elif key == "CURRENT":
-                    shared_data.ivt.current = float(value)
-                    history_tab.add_entry("Current", f"{value}A")
-                elif key == "APPS":
-                    shared_data.vcu.apps = float(value)
-                    history_tab.add_entry("APPS", f"{value}%")
-    except ValueError as e:
-        print(f"Error processing data: {data}, Error: {e}")
+# IVT Data frame
+ivtFrame = Frame(dashboard_frame, bg="lightgray", highlightbackground="black", highlightthickness=2)
+ivtFrame.grid(row=2, column=0, padx=20, pady=20, sticky="nsew")
+Label(ivtFrame, text="IVT Data:", fg="blue", bg="lightgray", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(ivtFrame, text="Voltage: 605 V", bg="lightgray", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(ivtFrame, text="Current: 0 A", bg="lightgray", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(ivtFrame, text="Wattage: 0 W", bg="lightgray", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
 
-# Serial Data Reader
-def read_serial_data():
-    if running:
-        try:
-            if serial_port and serial_port.in_waiting > 0:
-                line = serial_port.readline().decode("utf-8").strip()
-                process_serial_data(line)
-        except Exception as e:
-            print(f"Serial read error: {e}")
-        finally:
-            root.after(100, read_serial_data)
+# VCU Data frame
+vcuFrame = Frame(dashboard_frame, bg="lightcoral", highlightbackground="black", highlightthickness=2)
+vcuFrame.grid(row=2, column=1, padx=20, pady=20, sticky="nsew")
+Label(vcuFrame, text="VCU Data:", fg="blue", bg="lightcoral", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(vcuFrame, text="Mode: OFF", bg="lightcoral", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(vcuFrame, text="APPS: 0%", bg="lightcoral", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(vcuFrame, text="Brake: 0%", bg="lightcoral", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
 
-# Simulate Serial Data for Testing (Optional)
-def simulate_serial_data():
-    if running:
-        simulated_data = "TEMP:25,HUMIDITY:50,VOLTAGE:605,CURRENT:10,APPS:30"
-        process_serial_data(simulated_data)
-        root.after(1000, simulate_serial_data)
+# Data Logger frame
+dataLoggerFrame = Frame(dashboard_frame, bg="lightpink", highlightbackground="black", highlightthickness=2)
+dataLoggerFrame.grid(row=3, column=0, padx=20, pady=20, sticky="nsew")
+Label(dataLoggerFrame, text="Data Logger:", fg="blue", bg="lightpink", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(dataLoggerFrame, text="Vehicle Speed: 0 km/h", bg="lightpink", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(dataLoggerFrame, text="Wheel RPM: 0", bg="lightpink", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
 
-# Update GUI
-def update_gui():
-    if running:
-        acu_temperature_label.config(text=f"Temperature: {shared_data.acu.temperature}°C")
-        acu_humidity_label.config(text=f"Humidity: {shared_data.acu.humidity}%")
-        bms_min_voltage_label.config(text=f"Min Voltage: {shared_data.bms.minimumCellVoltage}V")
-        bms_max_voltage_label.config(text=f"Max Voltage: {shared_data.bms.maximumCellVoltage}V")
-        bms_max_temp_label.config(text=f"Max Temp: {shared_data.bms.maximumTemperature}°C")
-        vcu_mode_label.config(text=f"Mode: {shared_data.vcu.mode}")
-        vcu_apps_label.config(text=f"APPS: {shared_data.vcu.apps}%")
-        vcu_brake_label.config(text=f"Brake Sensor: {shared_data.vcu.brakeSensor}%")
-        ivt_current_label.config(text=f"Current: {shared_data.ivt.current}A")
-        ivt_voltage_label.config(text=f"Voltage: {shared_data.ivt.voltage}V")
-        ivt_wattage_label.config(text=f"Wattage: {shared_data.ivt.wattage}W")
-        inverter_rpm_label.config(text=f"Motor RPM: {shared_data.inverter.motorRPM}")
-        inverter_motor_temp_label.config(text=f"Motor Temp: {shared_data.inverter.motorTemperature}°C")
-        inverter_igbt_temp_label.config(text=f"IGBT Temp: {shared_data.inverter.igbtTemperature}°C")
-        root.after(1000, update_gui)
+# --- End Dashboard Content ---
 
-# Handle Window Close Event
-def on_closing():
-    global running
-    running = False  # Stop all updates
-    if serial_port and serial_port.is_open:
-        serial_port.close()
-        print("Serial port closed.")
-    root.quit()
-    root.destroy()
+# Create a shared data instance
+shared_data = SharedData()
 
-# Bind the close event to the main window
-root.protocol("WM_DELETE_WINDOW", on_closing)
+# History Tab (added as a separate tab)
+history_tab = HistoryTab(main_notebook, shared_data)
 
-# Start periodic updates
-running = True
-if serial_port:
-    read_serial_data()
-else:
-    simulate_serial_data()
-update_gui()
+# Dummy data update simulation
+def update_values():
+    inverterRPMLabel.config(text=f"Motor RPM: {shared_data.inverter.motorRPM}")
+    # Update additional dashboard labels as needed...
+    root.after(1000, update_values)
 
-# Run the application
+root.after(1000, update_values)
 root.mainloop()
