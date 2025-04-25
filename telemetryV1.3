@@ -1,0 +1,514 @@
+import tkinter
+from ttkthemes import ThemedTk
+from tkinter import *
+from tkinter import ttk
+import serial
+import serial.tools.list_ports
+import threading
+from historytab import HistoryTab  # Ensure the filename is history_tab.py
+
+# ===================== UTILITY FUNCTIONS ======================
+def fmap(x, in_min, in_max, out_min, out_max):
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+
+def getVoltage(intVoltage):
+    return (intVoltage + 10000) * 0.000150
+
+# ======================= DATA CLASSES =========================
+class ACUData:
+    def __init__(self):
+        self.temperature = 11
+        self.vicorTemperature = 0
+        self.humidity = 12
+        self.imdResistance = 0
+        self.imdStatus = 0
+        self.airPlus = "Armed"
+        self.airMinus = "Disarmed"
+        self.preRelay = "Disarmed"
+        self.TSOver60 = "No"
+        self.AMSError = "OK"
+        self.IMDError = "OK"
+        self.lastError = "None"
+        self.AirsStuck = "None"
+
+class BMSData:
+    def __init__(self):
+        self.minimumCellVoltage = 0.0
+        self.minimumCellVoltageID = 0
+        self.maximumCellVoltage = 0.0
+        self.maximumCellVoltageID = 0
+        self.maximumTemperature = 0
+        self.maximumTemperatureID = 0
+        self.lastError = "None"
+        self.ISOSPI = "OK"
+        self.voltages = "OK"
+        self.temperatures = "OK"
+        self.currentSensor = "OK"
+
+class VCUData:
+    def __init__(self):
+        self.Mode = "OFF"
+        self.APPS = 0
+        self.BrakeSensor = 0
+        self.lastError = "None"
+
+class IVTData:
+    def __init__(self):
+        self.current = 0
+        self.voltage = 605
+        self.wattage = 0
+        self.wattageCounter = 0
+        self.currentCounter = 0
+
+class InverterData:
+    def __init__(self):
+        self.motorRPM = 23
+        self.motorTemperature = 0
+        self.igbtTemperature = 0
+
+class TelemetryData:
+    def __init__(self):
+        self.isConnected = False
+        self.PER = 105
+        self.timeOutTimer = 0
+
+class DataLoggerData:
+    def __init__(self):
+        self.vehicleSpeed = 2
+        self.wheelRPM = 4
+
+class SharedData:
+    def __init__(self):
+        self.telemetry = TelemetryData()
+        self.acu = ACUData()
+        self.vcu = VCUData()
+        self.bms = BMSData()
+        self.ivt = IVTData()
+        self.inverter = InverterData()
+        self.datalogger = DataLoggerData()
+
+# ======================== UI SETUP =========================
+# Initialize the main window
+root = ThemedTk(theme="arc")
+width = root.winfo_screenwidth()
+height = root.winfo_screenheight()
+root.geometry("%dx%d" % (width, height))
+
+# Create a shared data instance
+shared_data = SharedData()
+
+# Create the main Notebook with two tabs
+main_notebook = ttk.Notebook(root)
+main_notebook.pack(expand=True, fill="both")
+
+# Dashboard Tab
+dashboard_frame = Frame(main_notebook)
+main_notebook.add(dashboard_frame, text="Dashboard")
+
+# =============== SERIAL UI + LOGIC ==================
+serial_frame = Frame(dashboard_frame, bg="white", highlightbackground="black", highlightthickness=2)
+serial_frame.grid(row=0, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
+Label(serial_frame, text="Serial Port:", font=("Arial", 16), bg="white").pack(side=LEFT, padx=10)
+
+port_var = StringVar()
+available_ports = [port.device for port in serial.tools.list_ports.comports()]
+port_dropdown = ttk.Combobox(serial_frame, textvariable=port_var, values=available_ports, state="readonly")
+port_dropdown.pack(side=LEFT, padx=10)
+
+connection_status = Label(serial_frame, text="Not Connected", bg="white", fg="red", font=("Arial", 14, "italic"))
+connection_status.pack(side=LEFT, padx=10)
+
+serial_connection = None
+
+def serial_thread():
+    global ser, SharedData
+    while True:
+        if not SharedData.telemetry.isConnected:
+            time.sleep(1)
+            continue
+        try:
+            if ser.inWaiting():
+                try:
+                    SharedData.telemetry.timeOutTimer = 0
+                    SerialList = ser.read_until(b'\n').decode().replace('\n','').split(" ")
+                    print(SerialList)
+                    # print(int(SerialList[11], 16))
+                    SharedData.telemetry.PER = int(SerialList[0], 16)
+                    SharedData.ivt.current = int(SerialList[2] + SerialList[3], 16) / 100
+                    SharedData.ivt.voltage = int(SerialList[4] + SerialList[5], 16) / 10
+                    SharedData.ivt.wattage = int(SerialList[6] + SerialList[7], 16) * 10
+                    SharedData.ivt.currentCounter = int(SerialList[8], 16) * 10
+                    SharedData.ivt.wattageCounter = int(SerialList[9], 16) * 100
+                    if int(SerialList[10], 16) & 0b1:  ##ACU Flags
+                        SharedData.acu.AMSError = "Error"
+                        AMSLatchedErrorLabel.config(fg='red')
+                    else:
+                        SharedData.acu.AMSError = "OK"
+                        AMSLatchedErrorLabel.config(fg='black')
+
+                    if (int(SerialList[10], 16) & 0b10) > 0:  ##ACU Flags
+                        SharedData.acu.IMDError = "Error"
+                        IMDLatchedErrorLabel.config(fg='red')
+
+                    else:
+                        SharedData.acu.IMDError = "OK"
+                        IMDLatchedErrorLabel.config(fg='black')
+
+                    if (int(SerialList[10], 16) & 0b100) > 0:  ##ACU Flags
+                        SharedData.acu.airPlus = "Armed"
+                        ACUAirPlusIsArmedLabel.config(fg='blueviolet')
+                    else:
+                        SharedData.acu.airPlus = "Disarmed"
+                        ACUAirPlusIsArmedLabel.config(fg='black')
+                    if (int(SerialList[10], 16) & 0b1000) > 0:  ##ACU Flags
+                        SharedData.acu.airMinus = "Armed"
+                        ACUAirMinusIsArmedLabel.config(fg='blueviolet')
+                    else:
+                        SharedData.acu.airMinus = "Disarmed"
+                        ACUAirMinusIsArmedLabel.config(fg='black')
+
+                    if (int(SerialList[10], 16) & 0b10000) > 0:  ##ACU Flags
+                        SharedData.acu.preRelay = "Armed"
+                        ACUPreIsArmedLabel.config(fg='blueviolet')
+                    else:
+                        SharedData.acu.preRelay = "Disarmed"
+                        ACUPreIsArmedLabel.config(fg='black')
+
+                    if (int(SerialList[10], 16) & 0b100000) > 0:  ##ACU Flags
+                        SharedData.bms.voltages = "Error"
+                        SharedData.bms.lastError = "Voltages"
+                        BMSVoltagesErrorLabel.config(fg='red')
+                    else:
+                        SharedData.bms.voltages = "OK"
+                        BMSVoltagesErrorLabel.config(fg='black')
+
+                    if (int(SerialList[10], 16) & 0b1000000) > 0:  ##ACU Flags
+                        SharedData.bms.temperatures = "Error"
+                        SharedData.bms.lastError = "Temps"
+                        BMSTemperaturesErrorLabel.config(fg='red')
+                    else:
+                        SharedData.bms.temperatures = "OK"
+                        BMSTemperaturesErrorLabel.config(fg='black')
+                    if SharedData.bms.temperatures == 'Error' and SharedData.bms.voltages == 'Error':
+                        SharedData.bms.ISOSPI = 'Error'
+                    else:
+                        SharedData.bms.ISOSPI = 'OK'
+                    if (int(SerialList[10], 16) & 0b10000000) > 0:  ##ACU Flags
+                        SharedData.bms.currentSensor = "Error"
+                        SharedData.bms.lastError = "CurrentSensor"
+                        BMSCurrentErrorLabel.config(fg='red')
+                    else:
+                        SharedData.bms.currentSensor = "OK"
+                        BMSCurrentErrorLabel.config(fg='black')
+
+                    SharedData.bms.maximumTemperature = int(SerialList[11], 16)
+                    SharedData.bms.maximumCellVoltage = "{:.3f}".format(
+                        getVoltage(int(SerialList[12] + SerialList[13], 16)))
+                    SharedData.bms.minimumCellVoltage = "{:.3f}".format(
+                        getVoltage(int(SerialList[14] + SerialList[15], 16)))
+
+                    if (int(SerialList[16], 16) & 0b1000) > 0:
+                        SharedData.acu.AirsStuck = "Air+ Stucked"
+                        AirsStuckedLabel.config(fg='red')
+                    if (int(SerialList[16], 16) & 0b10000) > 0:
+                        SharedData.acu.AirsStuck = "Air- Stucked"
+                        AirsStuckedLabel.config(fg='red')
+                    if (int(SerialList[16], 16) & 0b1000) > 0 and (int(SerialList[16], 16) & 0b10000) > 0:
+                        SharedData.acu.AirsStuck = "Both Airs Stucked"
+                        AirsStuckedLabel.config(fg='red')
+                    if (int(SerialList[16], 16) & 0b11000) == 0:
+                        SharedData.acu.AirsStuck = "No"
+                        AirsStuckedLabel.config(fg='black')
+
+                    if (int(SerialList[16], 16) & 0b100000) > 0:
+                        SharedData.acu.TSOver60 = "Yes"
+                        ACUTSOver60Label.config(fg='red')
+                    else:
+                        SharedData.acu.TSOver60 = "No"
+                        ACUTSOver60Label.config(fg='black')
+                    SharedData.bms.maximumTemperatureID = int(SerialList[17], 16)
+                    SharedData.bms.maximumCellVoltageID = int(SerialList[18], 16)
+                    SharedData.bms.minimumCellVoltageID = int(SerialList[19], 16)
+                    SharedData.acu.imdResistance = "{:.1f}".format(
+                        90 * 1200 / (fmap(int(SerialList[20], 16), 0, 255, 0, 100) - 6) - 1200)
+                    # if (int(SerialList[21], 16)):##VCU flags
+                    #     continue
+                    if (int(SerialList[21], 16) & 0b11) == 0:
+                        SharedData.vcu.Mode = "OFF"
+                        VCUModeLabel.config(fg='black')
+
+                    elif (int(SerialList[21], 16) & 0b11) == 1:
+                        SharedData.vcu.Mode = "PRE"
+                        VCUModeLabel.config(fg='red')
+                    elif int(SerialList[21], 16) & 0b11 == 2:
+                        SharedData.vcu.Mode = "R2D"
+                        VCUModeLabel.config(fg='blue')
+                    if (int(SerialList[21], 16) & 0b100) > 0:
+                        SharedData.vcu.lastError = "APPS Error"
+                    if (int(SerialList[21], 16) & 0b1000) > 0:
+                        SharedData.vcu.lastError = "Brake Error"
+                    if (int(SerialList[21], 16) & 0b10000) > 0:
+                        SharedData.vcu.lastError = "Inverter Error"
+                    SharedData.vcu.APPS = "{:.2f}".format(fmap(int(SerialList[22], 16), 0, 255, 0, 100))
+                    SharedData.vcu.BrakeSensor = "{:.2f}".format(fmap(int(SerialList[23], 16), 0, 255, 0, 100))
+                    SharedData.inverter.igbtTemperature = int(SerialList[24], 16)
+                    SharedData.inverter.motorTemperature = int(SerialList[25], 16)
+                    SharedData.inverter.motorRPM = int(SerialList[26] + SerialList[27], 16)
+                    SharedData.acu.humidity = int(SerialList[28], 16)
+                    SharedData.acu.temperature = int(SerialList[29], 16)
+                    SharedData.acu.vicorTemperature = int(SerialList[30], 16)
+                except:
+                    continue
+                    # SharedData.telemetry.isConnected = False
+                    # TelemetryIsConnectedLabel.config({'text': "Telemetry disconnected, reconnect:"})
+                    # TelemetryIsConnectedLabel.config(fg='red')
+        except:
+            SharedData.telemetry.isConnected = False
+            TelemetryIsConnectedLabel.config({'text': "Telemetry disconnected, reconnect:"})
+            TelemetryIsConnectedLabel.config(fg='red')
+
+
+def connect_serial():
+    global serial_connection
+    port = port_var.get()
+    if port:
+        try:
+            serial_connection = serial.Serial(port, 115200, timeout=1)
+            shared_data.telemetry.isConnected = True
+            connection_status.config(text=f"Connected to {port}", fg="green")
+            threading.Thread(target=read_serial, daemon=True).start()
+        except serial.SerialException as e:
+            connection_status.config(text="Connection Failed", fg="red")
+            print(f"Error: {e}")
+
+Button(serial_frame, text="Connect", command=connect_serial).pack(side=LEFT, padx=10)
+
+# ================== DASHBOARD ==================
+# Adjust grid layout
+# Adjust grid layout
+for i in range(1, 5):
+    dashboard_frame.grid_rowconfigure(i, weight=1)
+dashboard_frame.grid_columnconfigure(0, weight=1)
+dashboard_frame.grid_columnconfigure(1, weight=1)
+
+# --- Dashboard Content ---
+# Inverter
+# Inverter frame
+inverterFrame = Frame(dashboard_frame, bg="lightyellow", highlightbackground="black", highlightthickness=2)
+inverterFrame.grid(row=1, column=0, padx=20, pady=20, sticky="nsew")
+Label(inverterFrame, text="Inverter:", fg="blue", bg="lightyellow", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+inverterRPMLabel = Label(inverterFrame, text="Motor RPM: 23", bg="lightyellow", font=("Arial", 18))
+inverterRPMLabel.grid(row=1, column=0, padx=10, pady=5)
+Label(inverterFrame, text="Motor Temperature: 0°C", bg="lightyellow", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(inverterFrame, text="IGBT Temperature: 0°C", bg="lightyellow", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
+# Function to create a scrollable frame (used for flags)
+def create_scrollable_frame(parent):
+    canvas = Canvas(parent)
+    scrollbar = Scrollbar(parent, orient="vertical", command=canvas.yview)
+    scrollable_frame = Frame(canvas)
+    scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.grid(row=0, column=0, sticky="nsew")
+    scrollbar.grid(row=0, column=1, sticky="ns")
+    parent.grid_rowconfigure(0, weight=1)
+    parent.grid_columnconfigure(0, weight=1)
+    return scrollable_frame
+# ACU Flags frame with scrollbar
+acuFlagsFrame = Frame(dashboard_frame, bg="lightblue", highlightbackground="black", highlightthickness=2)
+acuFlagsFrame.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
+scrollable_acu = create_scrollable_frame(acuFlagsFrame)
+Label(scrollable_acu, text="ACU Flags:", fg="blue", bg="lightblue", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(scrollable_acu, text="Air+: Armed", bg="lightblue", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="Air-: Disarmed", bg="lightblue", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="Pre: Disarmed", bg="lightblue", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="Over 60V: No", bg="lightblue", font=("Arial", 18)).grid(row=4, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="AMS Error: OK", bg="lightblue", font=("Arial", 18)).grid(row=5, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="IMD Error: OK", bg="lightblue", font=("Arial", 18)).grid(row=6, column=0, padx=10, pady=5)
+Label(scrollable_acu, text="Airs Stuck: No", bg="lightblue", font=("Arial", 18)).grid(row=7, column=0, padx=10, pady=5)
+
+# ACU Data frame
+acuDataFrame = Frame(dashboard_frame, bg="lightcyan", highlightbackground="black", highlightthickness=2)
+acuDataFrame.grid(row=2, column=0, padx=20, pady=20, sticky="nsew")
+Label(acuDataFrame, text="ACU Data:", fg="blue", bg="lightcyan", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(acuDataFrame, text="Humidity: 12%", bg="lightcyan", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(acuDataFrame, text="Temperature: 11°C", bg="lightcyan", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(acuDataFrame, text="IMD Resistance: 0 Ω", bg="lightcyan", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
+Label(acuDataFrame, text="Vicor Temperature: 0°C", bg="lightcyan", font=("Arial", 18)).grid(row=4, column=0, padx=10, pady=5)
+
+# BMS Flags frame
+bmsFrame = Frame(dashboard_frame, bg="lightgreen", highlightbackground="black", highlightthickness=2)
+bmsFrame.grid(row=2, column=1, padx=20, pady=20, sticky="nsew")
+scrollable_bms = create_scrollable_frame(bmsFrame)
+Label(scrollable_bms, text="BMS Flags:", fg="blue", bg="lightgreen", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(scrollable_bms, text="Min Voltage: 0.0 V", bg="lightgreen", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(scrollable_bms, text="Max Voltage: 0.0 V", bg="lightgreen", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(scrollable_bms, text="Max Temp: 0°C", bg="lightgreen", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
+
+# IVT
+ivtFrame = Frame(dashboard_frame, bg="lightgray", highlightbackground="black", highlightthickness=2)
+ivtFrame.grid(row=2, column=0, padx=20, pady=20, sticky="nsew")
+Label(ivtFrame, text="IVT Data:", fg="blue", bg="lightgray", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+ivtVoltageLabel = Label(ivtFrame, text="Voltage: 0 V", bg="lightgray", font=("Arial", 18))
+ivtVoltageLabel.grid(row=1, column=0, padx=10, pady=5)
+ivtCurrentLabel = Label(ivtFrame, text="Current: 0 A", bg="lightgray", font=("Arial", 18))
+ivtCurrentLabel.grid(row=2, column=0, padx=10, pady=5)
+ivtWattageLabel = Label(ivtFrame, text="Wattage: 0 W", bg="lightgray", font=("Arial", 18))
+ivtWattageLabel.grid(row=3, column=0, padx=10, pady=5)
+ivtWattCounterLabel = Label(ivtFrame, text="Wattage Counter: 0", bg="lightgray", font=("Arial", 18))
+ivtWattCounterLabel.grid(row=4, column=0, padx=10, pady=5)
+ivtCurrentCounterLabel = Label(ivtFrame, text="Current Counter: 0", bg="lightgray", font=("Arial", 18))
+ivtCurrentCounterLabel.grid(row=5, column=0, padx=10, pady=5)
+# VCU Data frame
+vcuFrame = Frame(dashboard_frame, bg="lightcoral", highlightbackground="black", highlightthickness=2)
+vcuFrame.grid(row=3, column=1, padx=20, pady=20, sticky="nsew")
+Label(vcuFrame, text="VCU Data:", fg="blue", bg="lightcoral", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(vcuFrame, text="Mode: OFF", bg="lightcoral", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(vcuFrame, text="APPS: 0%", bg="lightcoral", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+Label(vcuFrame, text="Brake: 0%", bg="lightcoral", font=("Arial", 18)).grid(row=3, column=0, padx=10, pady=5)
+
+# Data Logger frame
+dataLoggerFrame = Frame(dashboard_frame, bg="lightpink", highlightbackground="black", highlightthickness=2)
+dataLoggerFrame.grid(row=4, column=0, padx=20, pady=20, sticky="nsew")
+Label(dataLoggerFrame, text="Data Logger:", fg="blue", bg="lightpink", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=5)
+Label(dataLoggerFrame, text="Vehicle Speed: 0 km/h", bg="lightpink", font=("Arial", 18)).grid(row=1, column=0, padx=10, pady=5)
+Label(dataLoggerFrame, text="Wheel RPM: 0", bg="lightpink", font=("Arial", 18)).grid(row=2, column=0, padx=10, pady=5)
+
+# ============ HISTORY TAB =============
+history_tab = HistoryTab(main_notebook, shared_data)
+
+# ============ PERIODIC UI UPDATE =============
+def update_values():
+    # global SharedData
+    ##Inverter Data
+    # print(SharedData)
+
+    inverterRPMString = "Motor RPM: " + str(SharedData.inverter.motorRPM) + "    "
+    inverterRPMLabel.config(text=inverterRPMString)
+
+    inverterMotorTemperatureString = "Motor Temperature: " + str(SharedData.inverter.motorTemperature) + " C    "
+    inverterMotorTemperatureLabel.config(text=inverterMotorTemperatureString)
+
+    inverterIGBTTemperatureString = "IGBT Temperature: " + str(SharedData.inverter.igbtTemperature) + " C    "
+    inverterIGBTTemperatureLabel.config(text=inverterIGBTTemperatureString)
+    ##ACU Flags Data
+    acuAirPlusIsArmedString = "Air+: " + str(SharedData.acu.airPlus) + "    "
+    ACUAirPlusIsArmedLabel.config(text=acuAirPlusIsArmedString)
+
+    acuAirMinusIsArmedString = "Air-: " + str(SharedData.acu.airMinus) + "    "
+    ACUAirMinusIsArmedLabel.config(text=acuAirMinusIsArmedString)
+
+    acuPreIsArmedString = "Pre: " + str(SharedData.acu.preRelay) + "    "
+    ACUPreIsArmedLabel.config(text=acuPreIsArmedString)
+
+    TSOver60VoltString = "over60V: " + str(SharedData.acu.TSOver60) + "    "
+    ACUTSOver60Label.config(text=TSOver60VoltString)
+
+    AMSLatchedErrorString = "AMSError: " + str(SharedData.acu.AMSError) + "    "
+    AMSLatchedErrorLabel.config(text=AMSLatchedErrorString)
+
+    IMDLatchedErrorString = "IMDError: " + str(SharedData.acu.IMDError) + "    "
+    IMDLatchedErrorLabel.config(text=IMDLatchedErrorString)
+
+    AirsStuckedString = "AirsStucked: " + str(SharedData.acu.AirsStuck) + "    "
+    ##ACU Data
+    acuHumidityString = "Humidity: " + str(SharedData.acu.humidity) + " %    "
+    ACUHumidityLabel.config(text=acuHumidityString)
+
+    acuTemperatureString = "Temperature: " + str(SharedData.acu.temperature) + " C    "
+    ACUTemperatureLabel.config(text=acuTemperatureString)
+
+    acuIMDResistanceString = "IMD Res: " + str(SharedData.acu.imdResistance) + " K    "
+    ACUIMDResistanceLabel.config(text=acuIMDResistanceString)
+
+    acuIMDStateString = "IMD State: " + str(SharedData.acu.imdStatus) + "    "
+    ACUIMDStateLabel.config(text=acuIMDStateString)
+
+    acuVicorTemperatureString = "Vicor Temperature: " + str(SharedData.acu.vicorTemperature) + " C    "
+    ACUVicorThermistorLabel.config(text=acuVicorTemperatureString)
+
+    ###BMS Flags Data
+    bmsISOSPIString = "ISOSPI: " + str(SharedData.bms.ISOSPI) + "    "
+    BMSISOSPIErrorLabel.config(text=bmsISOSPIString)
+
+    bmsVoltagesString = "Voltages: " + str(SharedData.bms.voltages) + "    "
+    BMSVoltagesErrorLabel.config(text=bmsVoltagesString)
+
+    bmsTemperaturesString = "Temperatures: " + str(SharedData.bms.temperatures) + "    "
+    BMSTemperaturesErrorLabel.config(text=bmsTemperaturesString)
+
+    bmsCurrentSensorString = "CurrentSensor: " + str(SharedData.bms.currentSensor) + "    "
+    BMSCurrentErrorLabel.config(text=bmsCurrentSensorString)
+
+    bmsLastErrorString = "Last Error: " + str(SharedData.bms.lastError) + "    "
+    BMSLastErrorLabel.config(text=bmsLastErrorString)
+
+    ###BMS Data
+    bmsMinVoltageString = "Min Voltage: " + str(SharedData.bms.minimumCellVoltage) + " V   "
+    BMSMinVoltageLabel.config(text=bmsMinVoltageString)
+    bmsMinVoltageIDString = "Min Voltage ID: " + str(SharedData.bms.minimumCellVoltageID) + "   "
+    BMSMinVoltageIDLabel.config(text=bmsMinVoltageIDString)
+    bmsMaxVoltageString = "Max Voltage: " + str(SharedData.bms.maximumCellVoltage) + " V   "
+    BMSMaxVoltageLabel.config(text=bmsMaxVoltageString)
+    bmsMaxVoltageIDString = "Max Voltage ID: " + str(SharedData.bms.maximumCellVoltageID) + "   "
+    BMSMaxVoltageIDLabel.config(text=bmsMaxVoltageIDString)
+
+    bmsMaxTemperatureString = "Max Temp: " + str(SharedData.bms.maximumTemperature) + " C   "
+    BMSMaxTemperatureLabel.config(text=bmsMaxTemperatureString)
+    bmsMaxTemperatureIDString = "Max Temp ID: " + str(SharedData.bms.maximumTemperatureID) + "   "
+    BMSMaxTemperatureIDLabel.config(text=bmsMaxTemperatureIDString)
+
+    ###IVT Data
+    IVTVoltageString = "Voltage: " + str(SharedData.ivt.voltage) + " V    "
+    IVTVoltageLabel.config(text=IVTVoltageString)
+
+    IVTCurrentString = "Current: " + str(SharedData.ivt.current) + " A    "
+    IVTCurrentLabel.config(text=IVTCurrentString)
+
+    IVTWattageString = "Wattage: " + str(SharedData.ivt.wattage) + " W    "
+    IVTWattageLabel.config(text=IVTWattageString)
+
+    IVTCurrentCounterString = "Current Counter: " + str(SharedData.ivt.currentCounter) + " Ah    "
+    IVTAmpereCounterLabel.config(text=IVTCurrentCounterString)
+
+    IVTWattageCounterString = "Wattage Counter: " + str(SharedData.ivt.wattageCounter) + " Wh    "
+    IVTWattageCounterLabel.config(text=IVTWattageCounterString)
+    ###VCU Data
+    VCUModeString = "Mode: " + str(SharedData.vcu.Mode) + "    "
+    VCUModeLabel.config(text=VCUModeString)
+    APPSString = "APPS: " + str(SharedData.vcu.APPS) + " %    "
+    APPSLabel.config(text=APPSString)
+    BrakeSensorString = "Brake: " + str(SharedData.vcu.BrakeSensor) + " %    "
+    BrakeSensorLabel.config(text=BrakeSensorString)
+    VCULastErrorString = "LastError: " + str(SharedData.vcu.lastError) + "    "
+    VCULastErrorLabel.config(text=VCULastErrorString)
+
+    SharedData.datalogger.vehicleSpeed = "{:.2f}".format(
+        SharedData.inverter.motorRPM / 3.98 * 398 * 3.1415 * 60 / 63360)
+    VehicleSpeedString = "Speed: " + str(SharedData.datalogger.vehicleSpeed) + " KM/h    "
+    VehicleSpeedLabel.config(text=VehicleSpeedString)
+    SharedData.datalogger.wheelRPM = "{:.2f}".format(SharedData.inverter.motorRPM / 3.98)
+    WheelRPMString = "Wheel RPM: " + str(SharedData.datalogger.wheelRPM) + "    "
+    WheelRPMLabel.config(text=WheelRPMString)
+    ###Telemetry Data
+    SharedData.telemetry.timeOutTimer += 1
+    if SharedData.telemetry.timeOutTimer > 10:
+        TelemetryPERLabel.config(text='PER: Not in reach    ')
+        TelemetryPERLabel.config(fg='red')
+    elif 0 <= SharedData.telemetry.PER < 33:
+
+        TelemetryPERString = "PER: " + str(SharedData.telemetry.PER) + " %    "
+        TelemetryPERLabel.config(text=TelemetryPERString)
+        TelemetryPERLabel.config(fg='limegreen')
+    elif 33 <= SharedData.telemetry.PER <= 66:
+        TelemetryPERString = "PER: " + str(SharedData.telemetry.PER) + " %    "
+        TelemetryPERLabel.config(text=TelemetryPERString)
+        TelemetryPERLabel.config(fg='orange')
+    elif SharedData.telemetry.PER > 66:
+        TelemetryPERString = "PER: " + str(SharedData.telemetry.PER) + " %    "
+        TelemetryPERLabel.config(text=TelemetryPERString)
+        TelemetryPERLabel.config(fg='red')
+
+
+root.after(1000, update_values)
+root.mainloop()
